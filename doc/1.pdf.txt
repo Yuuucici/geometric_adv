@@ -1,0 +1,1649 @@
+===== Page 1 =====
+Hijacking 3D Spatial Reasoning:
+Query-Conditioned Relational Adversarial Attacks on Point-Cloud
+Vision-Language Models
+Anonymous Authors
+Top-Conference Style Research Manuscript Draft
+Abstract
+3D vision-language models (3D VLMs) are moving beyond
+object-level point-cloud recognition toward scene-level ques-
+tion answering, natural-language grounding, relation-aware
+captioning, and embodied decision making. This shift creates
+a security problem that is not captured by classical 3D adver-
+sarial benchmarks: a model may correctly recognize all rele-
+vant objects while giving an incorrect answer about their spa-
+tial relation. Such relation-level failures are subtle, because the
+semantic layer appears intact, yet safety-critical decisions such
+as target selection, manipulation, and navigation can be cor-
+rupted. We introduce RelAttack3D, a query-conditioned rela-
+tional adversarial attack for point-cloud VLMs. Given a point-
+cloud scene and a natural-language query, RelAttack3Dparses
+the query into a relation graph, localizes the involved objects,
+mines relation-critical points, and optimizes constrained per-
+turbations that induce relation-level errors while preserving
+object semantics, local geometry, point density, and sensor
+plausibility.
+Unlike classification-critical point attacks, Re-
+lAttack3Dexplicitly models relation-dependent geometric ev-
+idence, including centroid projections, support/contact sur-
+faces, nearest inter-object point pairs, containment bound-
+aries, and free-space corridor margins. We further propose
+RelBench-3D, a relation-robustness evaluation protocol span-
+ning 3D visual question answering, natural-language ground-
+ing, relation-aware captioning, and embodied affordance judg-
+ment. Finally, we introduce Relation-Consistency Verification,
+a lightweight detection baseline based on logical query rewrit-
+ing, explicit geometric checking, and viewpoint consistency.
+This manuscript provides a detailed top-conference-style for-
+mulation, method, benchmark construction procedure, imple-
+mentation plan, ablation design, and result-table templates.
+Numerical entries are intentionally left as placeholders and
+must be replaced by real experiments before submission.
+1
+Introduction
+3D vision-language models (3D VLMs) are becoming a nat-
+ural interface between geometric perception and language-
+driven reasoning. Early point-cloud learning focused on shape
+classification, part segmentation, semantic segmentation, ob-
+ject detection, registration, completion, and reconstruction.
+Recent 3D VLMs instead ask a more ambitious question: can
+a model use point clouds as evidence for open-ended lan-
+guage interaction? PointLLM connects point-cloud encoders
+with large language models for object-level point-language in-
+struction following [5]; GPT4Point presents a unified point-
+language framework for understanding and generation [6]; and
+3D-LLM injects 3D world representations into large language
+models to support 3D question answering, dense captioning,
+grounding, dialogue, and navigation [7]. These models sug-
+gest that point clouds are no longer merely inputs to discrimi-
+native geometric networks. They increasingly serve as multi-
+modal evidence for language-conditioned spatial reasoning.
+This change forces a change in how robustness should be
+defined. In classical point-cloud adversarial learning, the dom-
+inant attack goal is object-level misclassification: a perturbed
+airplane is classified as a chair, or a perturbed chair is classi-
+fied as a table. This threat model remains relevant, but it is
+incomplete for 3D VLMs. A 3D VLM may correctly recog-
+nize a chair and a table, produce a fluent description, and still
+answer incorrectly when asked whether the chair is to the left
+of the table. It may recognize a sofa and a wall, yet incorrectly
+conclude that a robot can pass between them. It may identify a
+cup and a desk, but fail to judge whether the cup is on the desk
+or under it. These failures are not merely semantic recognition
+errors; they are relation-level reasoning failures.
+Relation-level failures are especially dangerous because
+spatial relations are the bridge between perception and action.
+Directional relations such as left/right and front/behind sup-
+port target search and navigation. Support relations such as
+on/under support manipulation. Distance and comparative re-
+lations support object disambiguation. Topological and affor-
+dance relations such as between, blocked, passable, reachable,
+and inside support embodied decision making. A system that
+preserves object recognition but corrupts these relations may
+appear reliable to a human evaluator while still causing down-
+stream planning or interaction failures.
+Existing 3D adversarial attacks have shown that point-cloud
+classifiers and perception systems are vulnerable to point per-
+turbation, point addition, point dropping, and minimal adver-
+sarial modifications [12, 13, 14]. Emerging work has also be-
+gun to study the adversarial robustness of 3D large VLMs and
+shows that point-based 3D VLMs can be vulnerable to vision-
+token and caption-level attacks [16]. However, these studies
+do not directly address a key question:
+1
+
+===== Page 2 =====
+Can an adversary preserve the semantic identity of
+the relevant objects and the plausibility of the point
+cloud while selectively hijacking the spatial relation
+reasoning of a 3D VLM under a natural-language
+query?
+We argue that this question defines a distinct and underex-
+plored attack surface. A successful relational attack should not
+simply make the model confused about what objects exist. It
+should keep the chair as a chair, the table as a table, and the
+scene visually plausible, while flipping or corrupting the an-
+swer to a relation query. This is a stronger and more diagnostic
+criterion than generic caption degradation.
+Key observation.
+The points that determine object identity
+are not necessarily the points that determine a spatial relation.
+For recognizing a chair, the chair back, seat, armrests, and legs
+may be discriminative. For answering whether the chair is left
+of a table, however, relation-relevant evidence may be con-
+centrated around projected centroids, lateral boundaries, near-
+est inter-object surfaces, or viewpoint-dependent bounding-
+box order. For answering whether a robot can pass between
+a sofa and a wall, the relevant points are not the most class-
+discriminative sofa points, but the clearance boundary and
+free-space corridor margin. Thus, attacking a 3D VLM’s rela-
+tion reasoning requires a query-conditioned and relation-aware
+perturbation strategy.
+We propose RelAttack3D, a query-conditioned relational
+adversarial attack framework for point-cloud VLMs. Given
+a point cloud P and a natural-language query q, RelAt-
+tack3Dfirst parses the query into a structured relation graph.
+It then localizes the involved objects and computes a relation-
+critical score for each point by combining model sensitivity,
+relation-specific geometric support, boundary importance, and
+reference-frame consistency.
+Only the top-ranked relation-
+critical points are perturbed. The perturbation is optimized
+to induce a target relation error while preserving object se-
+mantics, global geometry, local smoothness, point density, and
+sensor plausibility.
+The goal of this paper is not to claim a minor improvement
+over existing point-cloud attacks. The goal is to establish a
+more precise robustness problem for 3D VLMs: semantic-
+preserving relation hijacking. If a small, plausible point-cloud
+perturbation can systematically change relation answers while
+leaving object recognition intact, then object-level robustness
+and caption-level robustness are insufficient proxies for 3D
+VLM safety.
+Contributions.
+This manuscript makes the following contri-
+butions:
+• We formulate semantic-preserving relational attack as a
+new robustness problem for 3D VLMs. A valid attack must
+corrupt a relation answer while preserving the identities of
+the queried objects and satisfying geometric and sensor-
+plausibility constraints.
+• We introduce query-conditioned relation-critical point
+mining,
+which selects points according to language-
+conditioned relation evidence rather than classification
+saliency alone.
+• We design relation-specific attack objectives for 3D VQA,
+natural-language grounding, relation-aware captioning, and
+embodied affordance judgment.
+• We propose RelBench-3D, a benchmark protocol that ex-
+tracts relation-centric samples from ScanQA, ScanRefer,
+SQA3D, ReferIt3D-style referring expressions, and embod-
+ied scene questions.
+• We provide a lightweight defense baseline, Relation-
+Consistency Verification, which checks logical equiva-
+lence, geometric relation consistency, and viewpoint trans-
+formation consistency.
+• We provide detailed implementation, evaluation, ablation,
+and reporting templates suitable for converting this draft into
+a reproducible conference submission.
+2
+Related Work
+2.1
+Point-Cloud Representation Learning
+Deep learning on point clouds has progressed from sim-
+ple permutation-invariant architectures to hierarchical, graph-
+based, transformer-based, and masked-pretraining models.
+PointNet [1] introduced a symmetric aggregation mechanism
+for unordered point sets. PointNet++ [2] added hierarchical
+local feature learning. DGCNN [3] used dynamic graphs to
+capture local geometric neighborhoods, while Point-BERT [4]
+explored masked point modeling for 3D representation pre-
+training. These models remain important as point encoders for
+downstream 3D-language systems.
+However, representation learning alone does not solve re-
+lation reasoning.
+A point encoder may recognize object
+geometry, but relation reasoning requires object localiza-
+tion, reference-frame interpretation, relational comparison,
+and sometimes physical affordance reasoning. Our work stud-
+ies failures at this relation layer.
+2.2
+3D Vision-Language Models
+3D VLMs connect point-cloud perception with natural-
+language understanding. PointLLM [5] aligns point-cloud fea-
+tures with a large language model and supports generative
+3D object classification and captioning. GPT4Point [6] pro-
+poses a unified framework for point-language understanding
+and generation. 3D-LLM [7] extends large language models
+into 3D scenes and supports 3D captioning, question answer-
+ing, grounding, task decomposition, and navigation.
+These systems demonstrate a transition from object-level
+point-language alignment to scene-level reasoning.
+As 3D
+VLMs are increasingly used for grounded interaction, robust-
+ness must be evaluated not only by whether objects are named
+2
+
+===== Page 3 =====
+correctly, but also by whether spatial relations and action-
+relevant properties remain reliable.
+2.3
+3D
+Spatial
+Question
+Answering
+and
+Grounding
+ScanRefer [8] introduced natural-language 3D object local-
+ization in RGB-D scans. ScanQA [9] formulated 3D ques-
+tion answering for spatial scene understanding. SQA3D [10]
+considered situated question answering, where the agent’s
+position and orientation affect the answer.
+ReferIt3D-style
+datasets [11] contain fine-grained referring expressions that of-
+ten depend on relational object disambiguation.
+These benchmarks are useful foundations for relational ro-
+bustness, but they were not designed as adversarial robustness
+benchmarks. They typically evaluate clean-input task accuracy
+rather than whether relation answers are stable under small,
+structured, query-conditioned point-cloud perturbations.
+2.4
+Adversarial Attacks on 3D Point Clouds
+Xiang et al. [12] introduced adversarial point-cloud genera-
+tion and perturbation attacks.
+Later work studied minimal
+adversarial point modifications [13], transferability, outlier-
+aware constraints, robust training, and defense. Surveys sum-
+marize attack types such as point shifting, point dropping,
+point adding, transformation attacks, and optimization-based
+attacks [14].
+Most of these attacks target classifiers or perception mod-
+ules. Their success criterion is usually a wrong class label
+or wrong detection result. By contrast, RelAttack3Dtargets
+language-conditioned relation answers while explicitly pre-
+serving the semantic identities of the queried objects. This
+distinction matters because an attack that changes “chair” into
+“table” does not prove that relation reasoning is vulnerable; it
+only proves that object recognition is vulnerable.
+2.5
+Adversarial
+Robustness
+of
+Vision-
+Language Models
+Large VLMs are known to be vulnerable to adversarial visual
+perturbations, and robustness evaluation has become an im-
+portant topic in 2D multimodal learning [15]. Recent work
+on 3D large VLM robustness studies adversarial vulnerabil-
+ity in point-based 3D VLMs and introduces vision attacks and
+caption attacks [16]. This confirms that adversarial evaluation
+should be extended to 3D multimodal models.
+Our work differs by focusing on a structured failure mode:
+relation hijacking. Instead of simply degrading captions or
+forcing arbitrary target text, we ask whether a model can be
+made wrong about a specific relation while still recognizing
+the involved objects. This makes the attack more diagnostic
+for embodied and safety-critical settings.
+3
+Problem Formulation
+3.1
+3D VLM Inference
+Let a point-cloud scene be
+P = {pi}N
+i=1,
+pi = (xi, yi, zi, ci),
+(1)
+where (xi, yi, zi) ∈R3 are coordinates and ci denotes optional
+color, intensity, semantic feature, or learned embedding. A
+3D VLM Fθ receives P and a natural-language query q and
+produces an output
+Fθ(P, q) →y.
+(2)
+The output y may be a short answer, a free-form caption, a
+grounding box, a segmentation mask, or an action recommen-
+dation.
+We focus on queries that contain one or more spatial rela-
+tions. A query parser maps q into a relation graph
+Gq = (Vq, Eq),
+(3)
+where each node is an object mention and each edge is a spatial
+relation. A binary relation edge is written as
+τ = (os, r, ot, π),
+(4)
+where os is the subject object, ot is the reference object, r is
+the relation type, and π is the reference frame. Comparative
+relations can involve multiple references, e.g.
+τ = (os, closer than, ot1, ot2, π).
+(5)
+3.2
+Reference Frames
+Directional relations are undefined without a reference frame.
+The phrase “left of the table” may refer to a world frame, a
+camera frame, an observer frame, a robot ego frame, or an
+object-centric frame. We therefore define a directional relation
+as
+r = (rtype, π),
+(6)
+where π specifies the coordinate convention or pose.
+In
+datasets without reliable view or agent pose, we do not eval-
+uate left/right and front/behind as primary relation labels. In-
+stead, we focus on viewpoint-invariant or weakly viewpoint-
+dependent relations such as on/under, near/far, inside/outside,
+between, adjacent to, and supported by. In situated datasets,
+directional labels are evaluated under the provided pose de-
+scription.
+This design prevents a common benchmark flaw: measuring
+attack success on a relation whose ground truth is ambiguous.
+A top-conference submission must be explicit about this issue;
+otherwise the attack may be rejected as ill-posed.
+3.3
+Relation Taxonomy
+Table 1 summarizes the relation families considered in this
+work. Each family has different geometric evidence and there-
+fore a different attack surface.
+3
+
+===== Page 4 =====
+Table 1: Relation taxonomy used by RelAttack3D. The key point is that each relation family has different geometric evidence
+and should not be attacked with a single generic point saliency map.
+Relation Family
+Examples
+Dominant Geometric Evidence
+Relation-Critical Attack Sur-
+face
+Directional
+left/right, front/behind
+Relative
+centroid
+projection
+and
+projected bounding-box order under
+frame π
+Lateral
+or
+frontal
+object
+boundaries;
+centroid-
+projection region
+Contact/support
+on, under, above, be-
+low
+Vertical
+ordering,
+support/contact
+plane, surface normals
+Contact surface, lower/upper
+boundary, local normal field
+Distance
+near, far, closest to
+Euclidean or geodesic distance be-
+tween object surfaces or centers
+Nearest
+inter-object
+point
+pairs; facing boundaries
+Containment
+inside,
+outside,
+sur-
+rounded by
+Inclusion relation between object and
+container volume
+Container
+boundary
+shell,
+opening
+region,
+enclosed
+object boundary
+Comparative
+closer
+than,
+higher
+than, larger than
+Ordered comparison between multiple
+references or attributes
+Points affecting relative order
+or measured attribute
+Topological
+between, next to, adja-
+cent to
+Scene adjacency graph, object layout,
+free-space region
+Corridor boundary, obstacle
+margin,
+inter-object middle
+region
+Affordance/safety
+passable,
+blocked,
+reachable
+Traversability, robot footprint clear-
+ance, collision margin
+Narrow
+passage,
+obstacle
+boundary,
+clearance bottle-
+neck
+3.4
+Valid Relational Attack
+A conventional point-cloud attack is successful when the pre-
+dicted class changes. A relational attack requires a stricter cri-
+terion. Given a clean scene P, query q, clean answer y, target
+wrong answer ytar, and adversarial scene Padv, a sample is a
+valid relational attack if it satisfies four conditions:
+Relation error:
+g(Fθ(Padv, q)) = ytar
+or
+g(Fθ(Padv, q))̸ = g(Fθ(P, q)),
+(7)
+Semantic preservation:
+h(o | Padv) = h(o | P),
+∀o ∈Oq,
+(8)
+Geometric plausibility:
+Dgeo(P, Padv) ≤εg,
+(9)
+Sensor plausibility:
+Padv ∈Ssensor.
+(10)
+where g maps a free-form answer to a normalized relation la-
+bel, h is an object-recognition or object-grounding validator,
+Oq is the set of objects involved in the query, Dgeo is a geo-
+metric distance, and Ssensor is a set of sensor-plausible point
+clouds.
+The semantic preservation condition is crucial. Without it,
+an attack can trivially flip a relation answer by destroying ob-
+ject identity. Such a failure is not evidence of relation vulner-
+ability.
+3.5
+Threat Models
+We consider three threat models.
+White-box attack. The attacker knows the model architec-
+ture, parameters, and differentiable output distribution. This
+setting measures worst-case vulnerability.
+Transfer attack. The attacker has access to a surrogate
+model Fϕ and transfers adversarial point clouds to a target
+model Fθ. This setting is realistic because many deployed
+VLMs are inaccessible but architecturally similar.
+Query-only black-box attack. The attacker can only query
+the target model and observe outputs. This setting uses score
+estimation or discrete success feedback. We treat this as the
+most deployment-relevant setting, but also the most expensive.
+4
+Method
+4.1
+Overview
+Figure 1 gives the conceptual pipeline. RelAttack3Dtakes a
+point cloud and a natural-language query as input. It parses
+the query into relation tuples, localizes the relevant objects,
+computes relation-critical point scores, and optimizes pertur-
+bations only on selected points. The optimization objective
+combines a relation attack loss with semantic, geometric, den-
+sity, and sensor-plausibility regularizers.
+4.2
+Query-to-Relation Graph Parsing
+The parser maps a natural-language query into a relation graph
+Gq. We use a hybrid design:
+• A rule-based parser handles high-frequency patterns such as
+“A left of B”, “A on B”, “A closer to B than C”, and “between
+A and B”.
+• A language-model parser handles compositional or para-
+phrased queries and returns a structured JSON-like repre-
+4
+
+===== Page 5 =====
+Placeholder for Figure 1: Overview of RelAttack3D.
+Input point cloud and query →relation graph parser →object localization →relation-critical point mining →
+constrained attack optimization →relation error with semantic preservation.
+Figure 1: Conceptual overview of RelAttack3D. The final paper should replace this placeholder with a real pipeline figure and
+visual examples of relation-critical points.
+sentation.
+• A verifier checks whether the parsed relation is supported by
+the dataset annotations or geometric metadata.
+For example, the query
+“Can the robot pass between the sofa and the wall?”
+produces
+τ = (robot, passable between, sofa, wall, πego).
+(11)
+The query
+“Which object is closer to the table, the chair or the
+cabinet?”
+produces a comparative relation
+τ = (chair, closer than, table, cabinet).
+(12)
+The parser output is not trusted blindly. If the query cannot
+be mapped to a supported relation type, the sample is excluded
+from RelBench-3D. This filtering prevents noisy prompts from
+corrupting the evaluation.
+4.3
+Object Localization
+For each object mention o ∈Oq, we obtain an object region
+Ωo ⊂P. Depending on dataset and model access, Ωo may
+come from one of the following:
+• ground-truth instance masks or 3D bounding boxes;
+• a frozen 3D detector or instance segmentor;
+• the target 3D VLM’s grounding output;
+• a combination of detector proposals and language matching.
+In the main benchmark, we recommend reporting two set-
+tings:
+• Oracle localization: ground-truth object masks or boxes are
+used for relation-critical point mining. This isolates relation
+reasoning vulnerability from localization errors.
+• Predicted localization: object proposals are produced by
+an external detector or the target model. This measures end-
+to-end vulnerability.
+This separation is important. If the attack succeeds only
+because object localization fails, the claim is weaker.
+If it
+succeeds even under oracle localization, the relation reason-
+ing vulnerability is more convincing.
+4.4
+Relation-Critical Point Mining
+Let Ωs and Ωt be the point sets of the subject and reference
+objects. RelAttack3Dassigns each point pi a relation-critical
+score
+S(pi; q, r) = αSgrad(pi; q) + βSgeom(pi; r)
++ γSbdry(pi) + ηSframe(pi; r, π).
+(13)
+where Sgrad measures model sensitivity, Sgeom measures
+relation-specific geometric support, Sbdry measures boundary
+importance, and Sframe measures reference-frame relevance.
+The relation-critical set is
+Kq,r = TopKpi∈Ωs∪Ωt∪ΩctxS(pi; q, r),
+(14)
+where Ωctx contains contextual points such as inter-object cor-
+ridor points, container boundaries, or support surfaces.
+Gradient sensitivity.
+In the white-box setting,
+Sgrad(pi; q) = ∥∇piLrel(Fθ(P, q), ytar)∥2 .
+(15)
+For non-differentiable answer extraction, we compute gradi-
+ents through token logits or through a differentiable relation
+classifier attached to the VLM output embedding.
+Relation geometry.
+The geometric term depends on relation
+family. For directional relations,
+Sdir
+geom(pi) = exp
+
+−|u⊤
+π pi −umid|
+σu
+
+,
+(16)
+where uπ is the axis associated with the reference frame and
+umid is the midpoint of the projected object centroids. This
+prioritizes points near the projection boundary that can alter
+the model’s perceived order.
+For support/contact relations,
+Ssup
+geom(pi) = exp
+
+−|zi −zcontact|
+σz
+
+,
+(17)
+where zcontact approximates the support plane between ob-
+jects.
+For distance relations,
+Sdist
+geom(pi) = exp
+
+−d(pi, Πnear)
+σd
+
+,
+(18)
+5
+
+===== Page 6 =====
+where Πnear is the set of nearest inter-object point pairs.
+For passability relations,
+Spass
+geom(pi) = exp
+
+−d(pi, ∂Cfree)
+σc
+
+,
+(19)
+where ∂Cfree is the clearance boundary of the traversable cor-
+ridor.
+Boundary importance.
+Boundary points are often more in-
+fluential than interior points for relation judgments. We define
+Sbdry(pi) = 1 −
+d(pi, ∂Ωo)
+maxpj∈Ωo d(pj, ∂Ωo) + ξ ,
+(20)
+where ∂Ωo denotes the estimated object boundary.
+Reference-frame relevance.
+Directional relations require a
+frame. We assign higher scores to points whose perturbation
+changes the projection under π:
+Sframe(pi; r, π) =
+u⊤
+π (pi −co)
+ ,
+(21)
+where co is the object centroid.
+4.5
+Attack Objective
+The total objective is
+min
+δ
+Ltotal = Lrel + λsemLsem + λgeoLgeo
++ λsmoothLsmooth + λdensLdens + λphysLphys.
+(22)
+subject to
+δi = 0 if pi /∈Kq,r,
+∥δi∥2 ≤ε if pi ∈Kq,r.
+(23)
+Relation attack loss.
+If token logits are accessible,
+Lrel = −log Pθ(ytar | P + δ, q).
+(24)
+If the answer is free-form, we map the answer to a normalized
+relation label through an answer normalizer g and use
+Lrel = CE(g(Fθ(P + δ, q)), rtar).
+(25)
+For grounding, we additionally use
+Lground = 1 −IoU(Badv, Btar),
+(26)
+where Btar is an incorrect but semantically plausible target
+box. For embodied affordance judgment, we use
+Laff = CE(aadv, atar),
+(27)
+where atar is a target unsafe or incorrect action label.
+Semantic preservation.
+We penalize changes to object
+identity:
+Lsem =
+X
+o∈Oq
+KL (P(co | P)∥P(co | P + δ))
++ µm
+ 1 −IoU(Mo, M adv
+o
+)
+
+.
+(28)
+If class probabilities are unavailable, an external object valida-
+tor is used and semantic preservation is measured as a hard
+validity condition.
+Geometry.
+We use Chamfer and Hausdorff distances:
+CD(P, Padv) = 1
+|P|
+X
+p∈P
+min
+p′∈Padv ∥p −p′∥2
+2
++
+1
+|Padv|
+X
+p′∈Padv
+min
+p∈P ∥p′ −p∥2
+2,
+(29)
+HD(P, Padv) = max{dH(P, Padv), dH(Padv, P)},
+(30)
+dH(A, B) = max
+a∈A min
+b∈B ∥a −b∥2.
+(31)
+with
+Lgeo = CD(P, Padv) + ρHD(P, Padv).
+(32)
+Local smoothness and density.
+To avoid isolated spikes,
+Lsmooth =
+X
+i
+X
+j∈N(i)
+wij∥δi −δj∥2
+2.
+(33)
+For density preservation, we voxelize the scene and penalize
+density shifts:
+Ldens =
+X
+v∈V
+|ρv(P) −ρv(Padv)|.
+(34)
+Sensor plausibility.
+We restrict perturbations to surface-
+consistent displacements:
+Lphys =
+X
+i∈Kq,r
+max(0, |n⊤
+i δi| −εn) + λoutI[pi + δi /∈Svis],
+(35)
+where ni is a local surface normal and Svis is a visible surface
+region estimated from camera or sensor pose when available.
+4.6
+Optimization
+We use projected gradient descent over selected points:
+δt+1 = ΠC
+ δt −η∇δLtotal
+
+,
+(36)
+where ΠC projects perturbations into the allowed norm ball,
+relation-critical support set, and sensor-plausible surface con-
+straint. If only point dropping is allowed, the optimization is
+replaced by a discrete ranking rule over S(pi; q, r). If only
+point addition is allowed, candidate points are sampled near
+relation-critical surfaces and optimized under density and out-
+lier constraints.
+6
+
+===== Page 7 =====
+Algorithm 1 White-box RelAttack3D
+Require: Point cloud P, query q, target wrong answer ytar, model
+Fθ, budget ε, steps T.
+Ensure: Adversarial point cloud Padv.
+1: Parse q into relation graph Gq.
+2: Extract relation tuples {τk} and involved objects Oq.
+3: Localize object regions {Ωo : o ∈Oq}.
+4: Compute relation-critical score S(pi; q, r) for candidate points.
+5: Select Kq,r ←TopK(S).
+6: Initialize δ = 0.
+7: for t = 1 to T do
+8:
+Construct Padv = P + δ.
+9:
+Compute Lrel, Lsem, Lgeo, Lsmooth, Ldens, and Lphys.
+10:
+Update δ using projected gradient descent on Kq,r.
+11:
+Enforce δi = 0 for all pi /∈Kq,r.
+12:
+Project δ to norm, density, and sensor-plausibility constraints.
+13: end for
+14: return Padv = P + δ.
+4.7
+Transfer and Query-Only Variants
+For transfer attacks, we generate Padv on a surrogate model
+Fϕ and evaluate it on target model Fθ. To improve transfer-
+ability, we optimize an ensemble objective:
+Lens = 1
+M
+M
+X
+m=1
+Lrel(Fϕm(P + δ, q), ytar) + λLreg.
+(37)
+We also randomize point sampling, rotations consistent with
+the reference frame, and density augmentations during opti-
+mization.
+For query-only attacks, we estimate a relation score from
+model outputs.
+Let s(P, q, ytar) be a scalar score derived
+from target answer confidence, answer frequency across para-
+phrases, or an external relation judge. We update perturbations
+using natural evolution strategies:
+ˆ∇δs =
+1
+mσ
+m
+X
+j=1
+s(P + δ + σuj, q, ytar)uj,
+(38)
+where uj are random directions restricted to Kq,r. This pre-
+serves the core idea: even without gradients, the search space
+is reduced to relation-critical points.
+4.8
+Complexity
+Let N be the number of points, k the number of relation-
+critical points, and T the number of optimization steps. Full-
+point PGD requires gradients over all N points.
+RelAt-
+tack3Dreduces the optimization support to k ≪N, lower-
+ing memory and improving interpretability.
+The additional
+cost comes from object localization and relation-critical scor-
+ing. When ground-truth masks are available, relation scoring
+is O(N) plus nearest-neighbor computations for selected re-
+lation families. For distance and passability relations, nearest
+point pairs and corridor boundaries can be computed approxi-
+mately with voxel grids or k-d trees.
+Algorithm 2 Transfer / Query-Only RelAttack3D
+Require: Target model Fθ, optional surrogates {Fϕm}, query bud-
+get Q.
+1: Parse q and localize objects.
+2: Mine Kq,r using surrogate gradients or geometry-only scoring.
+3: if surrogates available then
+4:
+Optimize δ on surrogate ensemble.
+5:
+Evaluate Fθ(P + δ, q).
+6: else
+7:
+for t = 1 to Q do
+8:
+Sample perturbation directions restricted to Kq,r.
+9:
+Query Fθ and estimate relation-score gradient.
+10:
+Update and project δ.
+11:
+end for
+12: end if
+13: return best adversarial point cloud under validity constraints.
+5
+RelBench-3D: Benchmark Construc-
+tion
+A strong paper cannot rely on hand-picked examples.
+We
+therefore define RelBench-3D, a relation robustness protocol
+constructed from existing 3D-language datasets.
+5.1
+Source Datasets
+We recommend using the following sources:
+• ScanQA: relation-rich 3D question answering over indoor
+scenes.
+• ScanRefer: natural-language 3D grounding with object ref-
+erences.
+• SQA3D: situated question answering with agent pose and
+viewpoint information.
+• ReferIt3D / Nr3D / Sr3D-style data: fine-grained referring
+expressions with object disambiguation.
+• Embodied simulator subset:
+optional passability and
+reachability questions built in Habitat, AI2-THOR, or an
+equivalent simulator.
+5.2
+Sample Filtering
+Each candidate sample must pass four filters:
+1. The query contains a supported relation from Table 1.
+2. The involved objects can be localized by ground truth or a
+reliable detector.
+3. The clean model answer is correct under the answer nor-
+malizer.
+4. The target wrong answer is valid and non-trivial.
+The third filter is important. If the clean model already an-
+swers incorrectly, the sample cannot measure adversarial vul-
+nerability. It should be excluded from attack success statistics
+or counted separately as clean failure.
+7
+
+===== Page 8 =====
+5.3
+Target Answer Construction
+For binary questions, the target answer is often the opposite
+label. For multi-choice or open-ended questions, the target an-
+swer must be semantically plausible. For grounding, the target
+box should be a distractor object that satisfies the same cat-
+egory when possible but violates the target relation. For em-
+bodied passability, the target action should be a safety-relevant
+opposite label such as passable versus blocked.
+5.4
+Answer Normalization
+Free-form VLM outputs require robust normalization. We use
+a two-stage normalizer:
+• A rule-based mapper handles yes/no, left/right, on/under,
+and common synonyms.
+• A frozen language judge maps longer answers to relation
+labels, but only when confidence exceeds a threshold.
+All ambiguous outputs are marked as invalid or separately
+reported. This avoids inflating attack success by exploiting
+answer-format noise.
+5.5
+Benchmark Splits
+We recommend reporting results by relation family rather than
+only aggregate scores. A model may be robust to on/under
+but vulnerable to left/right. Aggregate attack success can hide
+these differences.
+6
+Relation-Consistency
+Verification
+Defense
+A paper that only attacks may be viewed as incomplete. We
+therefore propose Relation-Consistency Verification (RCV), a
+lightweight defense and diagnostic baseline. RCV does not
+claim to solve adversarial robustness, but it exposes relation
+instability.
+6.1
+Logical Query Rewriting
+For each query q, we generate logically equivalent or inverse-
+consistent queries:
+A left of B ⇔B right of A,
+(39)
+A on B ⇔B under A,
+(40)
+A closer to B than C ⇔A farther from C than B.
+(41)
+The language consistency score is
+Clang = 1
+K
+K
+X
+k=1
+I[g(F(P, qk)) ≡rk].
+(42)
+Low consistency indicates possible relation instability.
+6.2
+Explicit Geometric Checking
+When object boxes or masks are available, we compute a geo-
+metric relation label:
+rgeo = ψ(Bs, Bt, π),
+(43)
+where ψ is a deterministic geometric checker. For example,
+for left/right under frame π,
+ψ(Bs, Bt, π) = sign(u⊤
+π (cs −ct)).
+(44)
+A mismatch between rgeo and the VLM output rvlm is treated
+as a warning.
+6.3
+Viewpoint Transformation Consistency
+For viewpoint-dependent relations, we apply a known trans-
+formation T to the point cloud and transform the query ac-
+cordingly:
+F(TP, Tq) ≈TF(P, q).
+(45)
+An adversarial sample may break this equivariance even when
+the clean sample is stable.
+6.4
+Defense Score
+We combine the three checks into a detection score:
+DRCV = w1(1−Clang)+w2I[rgeo̸ = rvlm]+w3(1−Cview).
+(46)
+A sample is flagged if DRCV > τD.
+7
+Experiments
+This section is written in a submission-ready style, but numer-
+ical entries are placeholders. They must be replaced by real
+experiments.
+7.1
+Models
+We recommend evaluating at least three model families:
+• Object-level point-language models:
+PointLLM and
+GPT4Point-style models.
+• Scene-level 3D-language models: 3D-LLM-style models
+supporting scene QA or grounding.
+• Open-vocabulary grounding models: models that provide
+boxes or masks for object references.
+If a model is not fully differentiable or not fully open source,
+it should be evaluated under transfer or query-only settings
+rather than silently treated as white-box.
+8
+
+===== Page 9 =====
+Table 2: Recommended RelBench-3Dsplit structure. Values are placeholders and should be replaced after dataset construction.
+Split
+Directional
+Support
+Distance
+Comparative
+Topological
+Affordance
+ScanQA-derived VQA
+TBD
+TBD
+TBD
+TBD
+TBD
+–
+ScanRefer-derived grounding
+TBD
+TBD
+TBD
+TBD
+TBD
+–
+SQA3D situated QA
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+ReferIt3D referring expressions
+TBD
+TBD
+TBD
+TBD
+TBD
+–
+Embodied simulator subset
+TBD
+TBD
+TBD
+–
+TBD
+TBD
+7.2
+Baselines
+A convincing paper must compare against both generic attacks
+and relation-specific ablations:
+• Random noise: uniformly perturb selected points.
+• Global PGD: optimize all points without relation-critical
+mining.
+• Classification-critical attack: select points using object
+classification saliency.
+• Point drop: remove relation or classification critical points.
+• Point add: add points near object boundaries under density
+constraints.
+• Caption attack: optimize for a target caption without rela-
+tion constraints.
+• Geometry-only attack: use only relation geometry without
+VLM gradients.
+• RelAttack3D: full query-conditioned relation-critical at-
+tack.
+7.3
+Metrics
+We report the following metrics:
+• RASR: relation attack success rate.
+• TASR: targeted relation attack success rate.
+• VASR: valid attack success rate, requiring relation error and
+semantic preservation.
+• SPR: semantic preservation rate.
+• CD/HD: Chamfer and Hausdorff distances.
+• Density shift: voxel-wise density distribution change.
+• Outlier ratio: fraction of points violating local density or
+surface consistency.
+• Grounding shift: 1 −IoU(Bclean, Badv).
+• Decision risk: unsafe or wrong embodied action rate.
+• Query count: number of target-model queries for black-box
+attacks.
+The most important metric is VASR, not raw RASR. Raw
+RASR can be inflated by destroying object semantics; VASR
+cannot.
+7.4
+Main Results
+7.5
+Grounding and Captioning Results
+7.6
+Transfer and Black-Box Results
+7.7
+Ablations
+The ablation study must prove that the method is not merely
+PGD with a new name.
+7.8
+Defense Evaluation
+A useful defense result does not need to completely stop the
+attack. It should show whether relation inconsistency is de-
+tectable and where explicit geometry helps.
+7.9
+Human Imperceptibility Study
+Because point-cloud perturbations are difficult to judge visu-
+ally, we recommend a small human study. Participants see
+clean and adversarial point-cloud renderings from multiple
+views and answer whether they notice geometry corruption.
+Report detection accuracy and confidence. The study should
+not replace geometric metrics, but it strengthens the plausibil-
+ity claim.
+7.10
+Qualitative Visualization
+The final paper should include at least four visualization types:
+• relation-critical heatmaps for each relation family;
+• clean versus adversarial point-cloud comparisons;
+• grounding shift examples;
+• defense consistency examples showing equivalent-query
+contradictions.
+8
+Expected Analysis Structure
+When real results are available, the analysis should avoid
+weak statements such as “our attack performs better.” A top-
+conference analysis should answer the following:
+9
+
+===== Page 10 =====
+Table 3: Main 3D VQA relational attack results. Replace all TBD entries with real measurements. VASR is the most important
+metric because it requires relation error and semantic preservation.
+Method
+RASR ↑
+TASR ↑
+VASR ↑
+SPR ↑
+CD ↓
+HD ↓
+Outlier ↓
+Random noise
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+Global PGD
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+Classification-critical attack
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+Point drop
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+Caption attack
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+Geometry-only relation attack
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+RelAttack3D
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+TBD
+Table 4: Relation-family analysis. This table is essential because aggregate attack success can hide which relations are truly
+vulnerable.
+Relation Family
+RASR ↑
+VASR ↑
+SPR ↑
+CD ↓
+Dominant Selected Points
+Common Failure Mode
+Directional
+TBD
+TBD
+TBD
+TBD
+projected boundaries
+viewpoint ambiguity
+Contact/support
+TBD
+TBD
+TBD
+TBD
+contact surface
+support-plane confusion
+Distance
+TBD
+TBD
+TBD
+TBD
+nearest point pairs
+nearest-neighbor flip
+Containment
+TBD
+TBD
+TBD
+TBD
+container boundary
+inside/outside ambiguity
+Comparative
+TBD
+TBD
+TBD
+TBD
+order-sensitive points
+ranking reversal
+Topological
+TBD
+TBD
+TBD
+TBD
+corridor boundary
+adjacency confusion
+Affordance/safety
+TBD
+TBD
+TBD
+TBD
+clearance margin
+unsafe passability answer
+Does relation-critical mining matter?
+If full RelAt-
+tack3Doutperforms global PGD at similar CD and higher SPR,
+the result supports the central claim. If it only wins by using
+larger perturbations, the method is weak.
+Which relations are most vulnerable?
+Directional and
+comparative relations may be more vulnerable because they
+depend on reference-frame projection and relative ordering.
+Contact/support relations may be more stable because they are
+constrained by vertical geometry. This should be tested, not
+assumed.
+Does semantic preservation hold?
+A high raw RASR with
+low SPR is not a valid relation attack. The paper should em-
+phasize VASR.
+Does the attack transfer?
+If transfer is weak, the method
+may be overfitted to one model. If relation-critical geometry
+improves transfer, that is strong evidence that relation surfaces
+are shared vulnerabilities.
+Can simple consistency checks detect the attack?
+If RCV
+detects many attacks, the paper can argue for geometry-
+language consistency as a promising defense. If not, the paper
+can argue that current 3D VLMs lack reliable self-consistency
+under spatial perturbation.
+9
+Discussion
+9.1
+Why This Is Not Just Another Point-Cloud
+Attack
+The novelty of RelAttack3Dis not the use of PGD, Cham-
+fer distance, or saliency.
+Those components are standard.
+The novelty lies in the attack target and the point-selection
+criterion.
+Existing point-cloud attacks usually optimize for
+object-level misclassification or perception failure.
+RelAt-
+tack3Doptimizes for relation-level failure under semantic
+preservation.
+This changes what counts as success, what
+points should be perturbed, what datasets should be used, and
+what metrics should be reported.
+9.2
+Failure Cases
+We expect several failure cases:
+• If a relation is determined by large-scale scene layout, small
+local perturbations may be insufficient.
+• If the target model uses explicit geometric computation, re-
+lation hijacking may be harder.
+• If object localization is unstable, it may be difficult to sepa-
+rate localization failure from relation reasoning failure.
+• If the answer normalizer is noisy, attack success may be
+overestimated or underestimated.
+• If directional labels lack a valid reference frame, the bench-
+mark becomes ill-posed.
+10
+
+===== Page 11 =====
+Table 5: Natural-language grounding attack results. The attack should cause grounding shift while preserving the semantic
+identity of the involved objects.
+Method
+Attack Success ↑
+Grounding Shift ↑
+Clean Object Preserved ↑
+CD ↓
+Valid Rate ↑
+Random noise
+TBD
+TBD
+TBD
+TBD
+TBD
+Global PGD
+TBD
+TBD
+TBD
+TBD
+TBD
+Classification-critical attack
+TBD
+TBD
+TBD
+TBD
+TBD
+Caption attack
+TBD
+TBD
+TBD
+TBD
+TBD
+RelAttack3D
+TBD
+TBD
+TBD
+TBD
+TBD
+Table 6: Relation-aware captioning attack results.
+Method
+Err.↑
+Obj.↑
+Flu.↑
+Global PGD
+TBD
+TBD
+TBD
+Caption attack
+TBD
+TBD
+TBD
+RelAttack3D
+TBD
+TBD
+TBD
+9.3
+Limitations
+This work is primarily a digital robustness study unless phys-
+ical sensor experiments are added. A physically valid attack
+would need to demonstrate perturbations through RGB-D re-
+construction noise, LiDAR artifacts, reflective surfaces, ad-
+versarial geometry, or small physical attachments. We also
+assume that object localization is available or can be esti-
+mated. In fully open-world scenes, object localization errors
+may dominate relation reasoning errors.
+Finally, many 3D
+VLMs are not fully open source, so white-box claims must
+be clearly separated from transfer and query-only claims.
+9.4
+Ethical Considerations
+This work aims to identify and mitigate failures in 3D VLMs
+before they are deployed in robotics, AR/VR, assistive naviga-
+tion, and embodied agents. Experiments should be conducted
+on public datasets and simulators. Released code should in-
+clude evaluation scripts, defense baselines, and clear safety
+documentation. The paper should avoid instructions for caus-
+ing real-world sensor harm and should emphasize robustness
+auditing.
+10
+Conclusion
+We introduced RelAttack3D, a query-conditioned relational
+adversarial attack framework for point-cloud vision-language
+models. The main argument is that 3D VLM safety cannot
+be reduced to object recognition robustness or caption robust-
+ness. A model may preserve object semantics while failing at
+the spatial relations that drive grounding, manipulation, and
+navigation. RelAttack3Dexposes this vulnerability by parsing
+language queries into relation graphs, mining relation-critical
+points, and optimizing constrained perturbations that preserve
+semantics and point-cloud plausibility. We further proposed
+RelBench-3Dfor relation robustness evaluation and Relation-
+Consistency Verification as a lightweight diagnostic defense.
+The next step is empirical: implement the full pipeline, run ex-
+periments across multiple 3D VLMs and relation-rich datasets,
+and replace all placeholder results with reproducible measure-
+ments.
+A
+Appendix A: Prompt Templates
+A.1
+VQA Templates
+• Is the {subject} to the left of the {reference} from the
+agent’s viewpoint?
+• Is the {subject} on top of the {reference}?
+• Which object is closer to the {reference}, the {candidate1}
+or the {candidate2}?
+• Is the {subject} inside the {container}?
+• Can the robot pass between the {object1} and the {object2}?
+A.2
+Grounding Templates
+• Locate the {subject} to the left of the {reference}.
+• Find
+the
+{subject}
+between
+the
+{reference1}
+and
+{reference2}.
+• Select the object closest to the {reference}.
+• Identify the object on top of the {reference}.
+A.3
+Defense Rewriting Templates
+• A left of B ⇔B right of A.
+• A on B ⇔B under A.
+• A closer to B than C ⇔A farther from C than B.
+• The gap between A and B is passable ⇔the robot can tra-
+verse between A and B without collision.
+11
+
+===== Page 12 =====
+Table 7: Transfer attack results across model pairs. A top-conference paper should include transferability; otherwise the attack
+may be dismissed as white-box overfitting.
+Source Model
+Target Model
+RASR ↑
+VASR ↑
+SPR ↑
+CD ↓
+PointLLM-style
+GPT4Point-style
+TBD
+TBD
+TBD
+TBD
+GPT4Point-style
+PointLLM-style
+TBD
+TBD
+TBD
+TBD
+3D-LLM-style
+Point-language model
+TBD
+TBD
+TBD
+TBD
+Ensemble surrogate
+Held-out target
+TBD
+TBD
+TBD
+TBD
+Table 8: Query-only attack efficiency.
+Method
+VASR ↑
+Queries ↓
+CD ↓
+Random search
+TBD
+TBD
+TBD
+NES on all points
+TBD
+TBD
+TBD
+NES on relation-critical points
+TBD
+TBD
+TBD
+RelAttack3Dquery-only
+TBD
+TBD
+TBD
+B
+Appendix B: Geometric Checkers
+For object boxes Bs and Bt with centroids cs and ct, a simple
+directional checker under axis uπ is
+ψleft/right(Bs, Bt, π) = sign(u⊤
+π (cs −ct)).
+(47)
+For support relation,
+ψon(Bs, Bt) = I[zmin(Bs) ≥zmax(Bt) −τz]
+· I[overlapxy(Bs, Bt) > τo].
+(48)
+For passability,
+ψpass(Ba, Bb) = I[clearance(Ba, Bb) > wrobot + τc]. (49)
+These checkers are not meant to replace VLM reasoning. They
+provide a consistency signal.
+C
+Appendix C: Practical Implementa-
+tion Checklist
+• Build relation-filtered subsets and publish the filtering
+scripts.
+• Report clean accuracy before attack.
+• Exclude samples where the clean model already fails.
+• Report VASR, not only RASR.
+• Separate oracle localization from predicted localization.
+• Include transfer and query-only settings.
+• Include relation-family breakdowns.
+• Visualize selected relation-critical points.
+• Do not claim physical robustness or physical attack suc-
+cess unless tested with a sensor or simulator reconstruction
+pipeline.
+12
+
+===== Page 13 =====
+Table 9: Ablation study. The key comparison is full RelAttack3Dversus variants without relation-critical mining and without
+semantic preservation.
+Variant
+RASR ↑
+VASR ↑
+SPR ↑
+CD ↓
+Outlier ↓
+Interpretation
+Full RelAttack3D
+TBD
+TBD
+TBD
+TBD
+TBD
+full model
+Without gradient term
+TBD
+TBD
+TBD
+TBD
+TBD
+geometry only
+Without relation geometry
+TBD
+TBD
+TBD
+TBD
+TBD
+gradient only
+Without boundary term
+TBD
+TBD
+TBD
+TBD
+TBD
+no boundary prior
+Without semantic preservation
+TBD
+TBD
+TBD
+TBD
+TBD
+may destroy objects
+Without density/physical constraints
+TBD
+TBD
+TBD
+TBD
+TBD
+less plausible
+Classification-critical points
+TBD
+TBD
+TBD
+TBD
+TBD
+wrong saliency target
+Random selected points
+TBD
+TBD
+TBD
+TBD
+TBD
+no structure
+Table 10: Relation-Consistency Verification defense.
+Input Type
+Detection AUC ↑
+FPR ↓
+Residual VASR ↓
+Clean
+TBD
+TBD
+–
+Global PGD
+TBD
+TBD
+TBD
+Caption attack
+TBD
+TBD
+TBD
+RelAttack3D
+TBD
+TBD
+TBD
+Table 11: Human imperceptibility study template.
+Method
+Human Detect Acc. ↓
+Confidence ↓
+SPR ↑
+Random noise
+TBD
+TBD
+TBD
+Global PGD
+TBD
+TBD
+TBD
+RelAttack3D
+TBD
+TBD
+TBD
+13
+
+===== Page 14 =====
+References
+[1] C. R. Qi, H. Su, K. Mo, and L. J. Guibas. PointNet: Deep
+learning on point sets for 3D classification and segmen-
+tation. In CVPR, 2017.
+[2] C. R. Qi, L. Yi, H. Su, and L. J. Guibas. PointNet++:
+Deep hierarchical feature learning on point sets in a met-
+ric space. In NeurIPS, 2017.
+[3] Y. Wang, Y. Sun, Z. Liu, S. E. Sarma, M. M. Bronstein,
+and J. M. Solomon. Dynamic graph CNN for learning on
+point clouds. ACM Transactions on Graphics, 2019.
+[4] X. Yu, L. Tang, Y. Rao, T. Huang, J. Zhou, and J. Lu.
+Point-BERT: Pre-training 3D point cloud transformers
+with masked point modeling. In CVPR, 2022.
+[5] R. Xu, X. Wang, T. Wang, Y. Chen, J. Pang, and D. Lin.
+PointLLM: Empowering large language models to un-
+derstand point clouds. arXiv preprint arXiv:2308.16911,
+2023.
+[6] Z. Qi, Y. Fang, Z. Sun, X. Wu, T. Wu, J. Wang, D. Lin,
+and H. Zhao. GPT4Point: A unified framework for point-
+language understanding and generation. In CVPR, 2024.
+[7] Y. Hong, H. Zhen, P. Chen, S. Zheng, Y. Du, Z. Chen,
+and C. Gan. 3D-LLM: Injecting the 3D world into large
+language models. In NeurIPS, 2023.
+[8] D. Z. Chen, A. X. Chang, and M. Nießner. ScanRefer:
+3D object localization in RGB-D scans using natural lan-
+guage. In ECCV, 2020.
+[9] D. Azuma, T. Miyanishi, S. Kurita, and M. Kawanabe.
+ScanQA: 3D question answering for spatial scene under-
+standing. In CVPR, 2022.
+[10] X. Ma, S. Yong, Z. Zheng, Q. Li, Y. Liang, S.-C. Zhu,
+and S. Huang. SQA3D: Situated question answering in
+3D scenes. In ICLR, 2023.
+[11] P. Achlioptas, A. Abdelreheem, F. Xia, M. Elhoseiny, and
+L. J. Guibas. ReferIt3D: Neural listeners for fine-grained
+3D object identification in real-world scenes. In ECCV,
+2020.
+[12] C. Xiang, C. R. Qi, and B. Li. Generating 3D adversarial
+point clouds. In CVPR, 2019.
+[13] J. Kim, B.-S. Hua, T. Nguyen, and S.-K. Yeung. Mini-
+mal adversarial examples for deep learning on 3D point
+clouds. In ICCV, 2021.
+[14] H. Naderi and I. V. Baji´c. Adversarial attacks and de-
+fenses on 3D point cloud classification: A survey. arXiv
+preprint arXiv:2307.00309, 2023.
+[15] Y. Zhao, T. Pang, C. Du, X. Yang, C. Li, N.-M. Che-
+ung, and M. Lin.
+On evaluating adversarial robust-
+ness of large vision-language models.
+arXiv preprint
+arXiv:2305.16934, 2023.
+[16] C. Liu and N.-M. Cheung. On the adversarial robust-
+ness of 3D large vision-language models. arXiv preprint
+arXiv:2601.06464, 2026.
+14
